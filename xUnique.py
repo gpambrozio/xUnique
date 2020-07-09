@@ -24,7 +24,6 @@ from subprocess import (check_output as sp_co, CalledProcessError)
 from os import path, unlink, rename
 from hashlib import md5 as hl_md5
 from json import (loads as json_loads, dump as json_dump)
-from fileinput import (input as fi_input, close as fi_close)
 from re import compile as re_compile
 from sys import (argv as sys_argv, getfilesystemencoding as sys_get_fs_encoding, version_info)
 from collections import deque
@@ -58,10 +57,10 @@ six = construct_compatibility_layer()
 md5_hex = lambda a_str: hl_md5(a_str.encode('utf-8')).hexdigest().upper()
 if six.PY2:
     print_ng = lambda *args, **kwargs: print(*[six.text_type(i).encode(sys_get_fs_encoding()) for i in args], **kwargs)
-    output_u8line = lambda *args: print(*[six.text_type(i).encode('utf-8') for i in args], end='')
+    output_u8line = lambda f, *args: print(*[six.text_type(i).encode('utf-8') for i in args], end='', file=f)
 elif six.PY3:
     print_ng = lambda *args, **kwargs: print(*args, **kwargs)
-    output_u8line = lambda *args: print(*args, end='')
+    output_u8line = lambda f, *args: print(*args, end='', file=f)
 
 
 def decoded_string(string, encoding=None):
@@ -200,12 +199,14 @@ Please check:
         self.vprint('replace UUIDs and remove unused UUIDs')
         key_ptn = re_compile('(?<=\s)([0-9A-Z]{24}|[0-9A-F]{32})(?=[\s;])')
         removed_lines = []
-        for line in fi_input(self.xcode_pbxproj_path, backup='.ubak', inplace=1):
+        tmp_path = self.xcode_pbxproj_path + '.utmp'
+        tmp_file = open(tmp_path, "w+")
+        for line in open(self.xcode_pbxproj_path):
             # project.pbxproj is an utf-8 encoded file
             line = decoded_string(line, 'utf-8')
             key_list = key_ptn.findall(line)
             if not key_list:
-                output_u8line(line)
+                output_u8line(tmp_file, line)
             else:
                 new_line = line
                 # remove line with non-existing element
@@ -221,15 +222,14 @@ Please check:
                     for key in key_list:
                         new_key = self.__result[key]['new_key']
                         new_line = new_line.replace(key, new_key)
-                    output_u8line(new_line)
-        fi_close()
-        tmp_path = self.xcode_pbxproj_path + '.ubak'
+                    output_u8line(tmp_file, new_line)
+        tmp_file.close()
         if filecmp_cmp(self.xcode_pbxproj_path, tmp_path, shallow=False):
-            unlink(self.xcode_pbxproj_path)
-            rename(tmp_path, self.xcode_pbxproj_path)
+            unlink(tmp_path)
             warning_print('Ignore uniquify, no changes made to "', self.xcode_pbxproj_path, sep='')
         else:
-            unlink(tmp_path)
+            unlink(self.xcode_pbxproj_path)
+            rename(tmp_path, self.xcode_pbxproj_path)
             self._is_modified = True
             success_print('Uniquify done')
             if self.__result.get('uniquify_warning'):
@@ -259,7 +259,9 @@ Please check:
             x = children_pbx_key_ptn.search(x).group()
             return '.' in x, x
 
-        for line in fi_input(self.xcode_pbxproj_path, backup='.sbak', inplace=1):
+        tmp_path = self.xcode_pbxproj_path + '.stmp'
+        tmp_file = open(tmp_path, "w+")
+        for line in open(self.xcode_pbxproj_path):
             # project.pbxproj is an utf-8 encoded file
             line = decoded_string(line, 'utf-8')
             last_two.append(line)
@@ -268,7 +270,7 @@ Please check:
             # files search and sort
             files_match = files_start_ptn.search(line)
             if files_match:
-                output_u8line(line)
+                output_u8line(tmp_file, line)
                 files_flag = True
                 if isinstance(fc_end_ptn, six.text_type):
                     fc_end_ptn = re_compile(files_match.group(1) + fc_end_ptn)
@@ -276,7 +278,7 @@ Please check:
                 if fc_end_ptn.search(line):
                     if lines:
                         lines.sort(key=lambda file_str: files_key_ptn.search(file_str).group())
-                        output_u8line(''.join(lines))
+                        output_u8line(tmp_file, ''.join(lines))
                         lines = []
                     files_flag = False
                     fc_end_ptn = '\);'
@@ -288,7 +290,7 @@ Please check:
             # children search and sort
             children_match = children_start_ptn.search(line)
             if children_match:
-                output_u8line(line)
+                output_u8line(tmp_file, line)
                 child_flag = True
                 if isinstance(fc_end_ptn, six.text_type):
                     fc_end_ptn = re_compile(children_match.group(1) + fc_end_ptn)
@@ -297,7 +299,7 @@ Please check:
                     if lines:
                         if self.main_group_hex not in last_two[0]:
                             lines.sort(key=file_dir_order)
-                        output_u8line(''.join(lines))
+                        output_u8line(tmp_file, ''.join(lines))
                         lines = []
                     child_flag = False
                     fc_end_ptn = '\);'
@@ -309,7 +311,7 @@ Please check:
             # PBX search and sort
             pbx_match = pbx_start_ptn.search(line)
             if pbx_match:
-                output_u8line(line)
+                output_u8line(tmp_file, line)
                 pbx_flag = True
                 if isinstance(pbx_end_ptn, tuple):
                     pbx_end_ptn = re_compile(pbx_match.group(1).join(pbx_end_ptn))
@@ -320,7 +322,7 @@ Please check:
                             lines.sort(key=lambda file_str: children_pbx_key_ptn.search(file_str).group())
                         else:
                             lines.sort(key=lambda file_str: pbx_key_ptn.search(file_str).group(1))
-                        output_u8line(''.join(lines))
+                        output_u8line(tmp_file, ''.join(lines))
                         lines = []
                     pbx_flag = False
                     pbx_end_ptn = ('^.*End ', ' section.*')
@@ -331,15 +333,14 @@ Please check:
                         lines.append(line)
             # normal output
             if not (files_flag or child_flag or pbx_flag):
-                output_u8line(line)
-        fi_close()
-        tmp_path = self.xcode_pbxproj_path + '.sbak'
+                output_u8line(tmp_file, line)
+        tmp_file.close()
         if filecmp_cmp(self.xcode_pbxproj_path, tmp_path, shallow=False):
-            unlink(self.xcode_pbxproj_path)
-            rename(tmp_path, self.xcode_pbxproj_path)
+            unlink(tmp_path)
             warning_print('Ignore sort, no changes made to "', self.xcode_pbxproj_path, sep='')
         else:
-            unlink(tmp_path)
+            unlink(self.xcode_pbxproj_path)
+            rename(tmp_path, self.xcode_pbxproj_path)
             self._is_modified = True
             success_print('Sort done')
             if removed_lines:
